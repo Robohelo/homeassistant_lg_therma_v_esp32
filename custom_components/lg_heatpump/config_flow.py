@@ -11,6 +11,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
 from .const import CONF_SLAVE, DEFAULT_PORT, DEFAULT_SLAVE, DOMAIN
+from .modbus_compat import close_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ async def _test_connection(host: str, port: int) -> bool:
     try:
         return await client.connect()
     finally:
-        await client.close()
+        await close_client(client)
 
 
 class LgHeatpumpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

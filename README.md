@@ -1,6 +1,6 @@
 # LG Heatpump (Modbus) — Home Assistant Integration
 
-**V2.5** — full conversion of your entire `modbus:` + `template:` YAML
+**V2.6** — full conversion of your entire `modbus:` + `template:` YAML
 (23 input registers, 11 holding registers, 17 discrete inputs, 7 coils, 3
 template selects, 8 template numbers) into a HACS-installable integration
 with a UI config flow, five entity platforms, and no more `secrets.yaml`
@@ -292,8 +292,46 @@ Credit for this exact pattern goes to a Home Assistant community
 writeup on the same problem in a different Modbus integration:
 https://community.home-assistant.io/t/managing-pymodbus-versions-in-custom-integrations/823773
 
+## 🔧 Fixed: `TypeError: 'NoneType' object can't be awaited` in the config flow
+
+If you hit this right after the previous fix:
+
+```
+File "/config/custom_components/lg_heatpump/config_flow.py", line 32, in _test_connection
+    await client.close()
+TypeError: 'NoneType' object can't be awaited
+```
+
+Same root cause as the crash above - a pymodbus API change - but a
+different method. `client.close()` used to be `async def` on older
+pymodbus releases; on the current release (confirmed 3.14.0) it's a
+plain synchronous method that just returns `None`. `await None` raises
+this exact error. It was called this way in two places: the config
+flow's connection test, and `async_unload_entry` (which would have hit
+the same crash on integration reload/removal, just not on first setup).
+
+Fixed with a small `close_client()` helper in `modbus_compat.py` that
+checks whether `client.close()` actually returned something awaitable
+before awaiting it - works whether the installed pymodbus has a sync or
+async `close()`, rather than assuming either.
+
+**This one slipped through V2.5's own testing** - the sandbox smoke test
+for that release hit this exact `TypeError` on a `close()` call, and it
+got misread as an artifact of closing a never-connected test client
+rather than a real bug, so it shipped anyway. Worth saying plainly rather
+than glossing over. This time it's confirmed against a full round-trip
+against a live mock Modbus TCP server (connect → read → write → verify
+→ close), using the actual shipped `close_client()` code, not just
+reasoning about what pymodbus's source does.
+
 ## Version history
 
+- **V2.6** — fixed `TypeError: 'NoneType' object can't be awaited` in the
+  config flow (and the same bug in `async_unload_entry`) - `client.close()`
+  is synchronous on current pymodbus, not `async def` like older
+  releases. Added `close_client()` to `modbus_compat.py`. Verified with a
+  full connect/read/write/verify/close round trip against a live mock
+  Modbus TCP server using the actual shipped code.
 - **V2.5** — fixed an install-crash bug (`RequirementsNotFound`): the
   `pymodbus>=3.6.0,<3.9.0` pin in `manifest.json` conflicted with the
   newer pymodbus HA's own dependency resolver installs. Widened the pin

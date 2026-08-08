@@ -23,6 +23,7 @@ from .const import (
     ModbusSensorDescription,
 )
 from .coordinator import LgHeatpumpModbusCoordinator
+from .modbus_compat import close_client
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,5 +112,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)
-        await data["client"].close()
+        await close_client(data["client"])
     return unload_ok

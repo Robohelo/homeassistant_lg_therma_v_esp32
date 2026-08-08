@@ -24,10 +24,19 @@ for that reason, not just the device-id parameter.
 Fix pattern credited to AntoineL's writeup for the Hitachi Yutaki
 integration:
 https://community.home-assistant.io/t/managing-pymodbus-versions-in-custom-integrations/823773
+
+Separately: `client.close()` was an `async def` method on older pymodbus
+releases, but is a plain synchronous method (returns `None`) on current
+releases (confirmed against 3.14.0). `await`-ing a `None` raises
+`TypeError: object NoneType can't be used in 'await' expression` /
+"'NoneType' object can't be awaited" - use `close_client()` below instead
+of calling `client.close()` directly, anywhere in this integration.
 """
 from __future__ import annotations
 
+import inspect
 from functools import lru_cache
+from typing import Any
 
 
 @lru_cache(maxsize=1)
@@ -50,3 +59,18 @@ def get_pymodbus_device_param() -> str:
         # for anything we failed to introspect.
         pass
     return "slave"
+
+
+async def close_client(client: Any) -> None:
+    """Close a pymodbus client, whether close() is sync or async.
+
+    Older pymodbus releases had an `async def close(self)`. Current
+    releases (confirmed on 3.14.0) made it a plain synchronous method
+    that returns None - calling `await client.close()` unconditionally
+    then raises `TypeError: object NoneType can't be used in 'await'
+    expression`. Check what actually came back before deciding whether
+    to await it, rather than assuming either behaviour.
+    """
+    result = client.close()
+    if inspect.isawaitable(result):
+        await result
