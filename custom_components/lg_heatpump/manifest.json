@@ -8,5 +8,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/robohelo/ha-lg-heatpump/issues",
   "requirements": ["pymodbus>=3.6.9,<4.0.0", "packaging"],
-  "version": "2.6.0"
+  "version": "2.7.0"
 }

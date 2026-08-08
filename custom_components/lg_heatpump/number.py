@@ -86,11 +86,13 @@ class LgHeatpumpNumber(CoordinatorEntity[LgHeatpumpModbusCoordinator], NumberEnt
             raw += 0x10000
         raw = max(0, min(raw, 0xFFFF))
 
-        result = await self._client.write_register(
-            address=self._description.write_address,
-            value=raw,
-            **{get_pymodbus_device_param(): self._slave},
-        )
+        # Same shared lock the coordinators use for reads - see __init__.py.
+        async with self.coordinator.lock:
+            result = await self._client.write_register(
+                address=self._description.write_address,
+                value=raw,
+                **{get_pymodbus_device_param(): self._slave},
+            )
         if result.isError():
             _LOGGER.error(
                 "Failed writing %s (raw %s) to holding register %s (%s)",

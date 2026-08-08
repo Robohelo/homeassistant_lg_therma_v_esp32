@@ -1,6 +1,6 @@
 # LG Heatpump (Modbus) — Home Assistant Integration
 
-**V2.6** — full conversion of your entire `modbus:` + `template:` YAML
+**V2.7** — full conversion of your entire `modbus:` + `template:` YAML
 (23 input registers, 11 holding registers, 17 discrete inputs, 7 coils, 3
 template selects, 8 template numbers) into a HACS-installable integration
 with a UI config flow, five entity platforms, and no more `secrets.yaml`
@@ -232,6 +232,57 @@ Everything lives in `const.py`, grouped into five tuples:
 remove, or edit an entry there and restart — no other file needs to
 change.
 
+## 🔧 Fixed: transaction ID mismatches, "no response after retries", garbled reads
+
+If your log looks like this:
+
+```
+ERROR (MainThread) [pymodbus.logging] ERROR: request ask for transaction_id=1 but got id=2, Skipping.
+ERROR (MainThread) [pymodbus.logging] No response received after 3 retries, continue with next request
+>>>>> extra:  unexpected data: 0xaa 0x55 ...
+```
+
+This one took real packet-level debugging to pin down, so here's the full
+picture, since it's a two-part problem.
+
+**Part 1 - the actual bug, now fixed:** this integration creates one
+`DataUpdateCoordinator` per unique `scan_interval` value (so registers
+polled at the same rate share a request cycle), but all of them shared a
+single `AsyncModbusTcpClient` with **no lock**. Home Assistant schedules
+each coordinator's polling independently - there's no built-in guarantee
+that a 2-second-interval coordinator and a 30-second-interval coordinator
+won't both fire a Modbus request at the same moment. When that happened,
+two requests went out on the same TCP connection before the first
+response came back. Confirmed this was real (not theoretical) by running
+the actual coordinator code from V2.6 with two coordinators racing
+against a mock slow server: **without the fix, 2 requests were
+simultaneously in flight; with the fix (a shared `asyncio.Lock` now
+wrapping every read in `coordinator.py` and every write in `switch.py`/
+`select.py`/`number.py`), never more than 1.**
+
+**Part 2 - why that overlap caused total corruption instead of a clean
+retry:** if you shared a screenshot of your gateway's config, this part
+is specific to your setup, but likely applies to any similar RS-485↔TCP
+bridge. A **Waveshare RS485-to-ETH gateway in `Protocol: None` mode**
+is a fully transparent byte pipe - it has no idea what Modbus even is,
+and does no request queuing at all. Its own UI documents the fix:
+*"Multi-host is always enabled when Protocol is Modbus TCP to RTU."*
+With `Protocol: None`, two overlapping requests don't get queued - they
+both hit the RS-485 wire and corrupt each other, which is exactly the
+garbled/mismatched traffic in the logs.
+
+**Two independent fixes, both worth doing:**
+1. **This integration** now serializes all its own Modbus traffic
+   through one lock (done, V2.7).
+2. **On the gateway itself** (if you're using a similar Waveshare
+   device): change **Protocol** from `None` to `Modbus TCP to RTU` in
+   its web UI. Its own documentation says this auto-enables Multi-host
+   queuing, which would protect against overlapping requests from *any*
+   source, not just this integration - useful if anything else ever
+   talks to the same gateway. The existing `RS485 Conflict Time Gap`
+   (20ms) setting only meaningfully helps once Multi-host queuing is
+   active.
+
 ## Notes / possible follow-ups
 
 - **pymodbus compatibility is now handled at runtime**, not by pinning a
@@ -325,6 +376,16 @@ against a live mock Modbus TCP server (connect → read → write → verify
 reasoning about what pymodbus's source does.
 
 ## Version history
+
+- **V2.7** — fixed the root cause of transaction ID mismatches / garbled
+  reads / constant retries: added a shared `asyncio.Lock` so this
+  integration never has two Modbus requests in flight at once across its
+  multiple coordinators and switch/select/number writes. Verified with a
+  real concurrency test (two coordinators racing against a mock slow
+  server) showing the old code allowed 2 simultaneous requests and the
+  new code caps it at 1. Also documented a gateway-side config fix
+  (Waveshare "Protocol: Modbus TCP to RTU" enables proper request
+  queuing) for anyone hitting the same symptom from a different source.
 
 - **V2.6** — fixed `TypeError: 'NoneType' object can't be awaited` in the
   config flow (and the same bug in `async_unload_entry`) - `client.close()`

@@ -1,6 +1,7 @@
 """DataUpdateCoordinator for the LG Heatpump (Modbus) integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import struct
 from datetime import timedelta
@@ -63,6 +64,7 @@ class LgHeatpumpModbusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         slave: int,
         sensors: list[ModbusSensorDescription],
         update_interval: int,
+        lock: asyncio.Lock,
     ) -> None:
         super().__init__(
             hass,
@@ -73,6 +75,7 @@ class LgHeatpumpModbusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self.slave = slave
         self.sensors = sensors
+        self.lock = lock
 
     async def _async_update_data(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
@@ -102,15 +105,21 @@ class LgHeatpumpModbusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         if description.input_type == INPUT_TYPE_INPUT:
-            result = await self.client.read_input_registers(**kwargs)
+            method = self.client.read_input_registers
         elif description.input_type == INPUT_TYPE_HOLDING:
-            result = await self.client.read_holding_registers(**kwargs)
+            method = self.client.read_holding_registers
         elif description.input_type == INPUT_TYPE_COIL:
-            result = await self.client.read_coils(**kwargs)
+            method = self.client.read_coils
         elif description.input_type == INPUT_TYPE_DISCRETE:
-            result = await self.client.read_discrete_inputs(**kwargs)
+            method = self.client.read_discrete_inputs
         else:
             raise UpdateFailed(f"Unsupported input_type: {description.input_type}")
+
+        # Serialize every request/response exchange through the shared lock -
+        # see the comment in __init__.py's async_setup_entry for why this
+        # isn't optional on a transparent RS-485<->TCP gateway.
+        async with self.lock:
+            result = await method(**kwargs)
 
         if result.isError():
             raise UpdateFailed(f"Modbus error reading {description.key}: {result}")

@@ -77,11 +77,13 @@ class LgHeatpumpSwitch(CoordinatorEntity[LgHeatpumpModbusCoordinator], SwitchEnt
         await self._write(False)
 
     async def _write(self, value: bool) -> None:
-        result = await self._client.write_coil(
-            address=self._description.write_address,
-            value=value,
-            **{get_pymodbus_device_param(): self._slave},
-        )
+        # Same shared lock the coordinators use for reads - see __init__.py.
+        async with self.coordinator.lock:
+            result = await self._client.write_coil(
+                address=self._description.write_address,
+                value=value,
+                **{get_pymodbus_device_param(): self._slave},
+            )
         if result.isError():
             _LOGGER.error(
                 "Failed writing coil %s (%s) to %s",

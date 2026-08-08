@@ -1,6 +1,7 @@
 """The LG Heatpump (Modbus) integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -66,6 +67,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await client.connect():
         raise ConfigEntryNotReady(f"Unable to connect to Modbus device at {host}:{port}")
 
+    # A single lock shared by every coordinator AND every switch/select/number
+    # write, so this integration never has two Modbus requests in flight on
+    # the shared client at once. This matters even beyond "one client, one
+    # TCP connection" hygiene: many RS-485<->TCP gateways (this one included -
+    # see the config screenshot) run in a "transparent"/passthrough mode with
+    # no Modbus awareness and no built-in request queuing, so two overlapping
+    # requests can genuinely collide on the physical RS-485 bus and corrupt
+    # both. Home Assistant's DataUpdateCoordinator schedules each coordinator
+    # independently with no cross-coordinator ordering guarantee, so without
+    # this lock, two coordinators' scheduled polls (or a poll racing a
+    # user-triggered switch/select/number write) can and will overlap.
+    modbus_lock = asyncio.Lock()
+
     # Every readable register across all platforms (sensor, binary_sensor,
     # switch state read-back) is grouped into shared coordinators by
     # scan_interval, so registers that poll at the same rate share one
@@ -84,7 +98,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinators: list[LgHeatpumpModbusCoordinator] = []
     key_to_coordinator: dict[str, LgHeatpumpModbusCoordinator] = {}
     for interval, descriptions in groups.items():
-        coordinator = LgHeatpumpModbusCoordinator(hass, client, slave, descriptions, interval)
+        coordinator = LgHeatpumpModbusCoordinator(
+            hass, client, slave, descriptions, interval, modbus_lock
+        )
         await coordinator.async_config_entry_first_refresh()
         coordinators.append(coordinator)
         for description in descriptions:
@@ -93,6 +109,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "client": client,
         "slave": slave,
+        "lock": modbus_lock,
         "coordinators": coordinators,
         "key_to_coordinator": key_to_coordinator,
     }
