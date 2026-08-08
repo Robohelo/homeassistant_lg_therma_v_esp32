@@ -407,8 +407,8 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # consider renaming both `key` and `name` here once you've confirmed
     # it against your own unit.
     ModbusSensorDescription(
-        key="hp_temp_technikraum",
-        name="Temperatur Technikraum",
+        key="temperature_indoreunit",
+        name="Temperature Terminal",
         address=7,
         scale=0.1,
         precision=1,
@@ -424,7 +424,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
         scale=0.1,
         precision=1,
         scan_interval=10,
-        unit_of_measurement="l/min",
+        unit_of_measurement="L/min",
         device_class="volume_flow_rate",
         state_class="measurement",
     ),
@@ -462,7 +462,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # resolved, hp_water_pressure moved to address 13 per official docs.
     ModbusSensorDescription(
         key="hp_outside_temp",
-        name="Außentemperatur",
+        name="Outsidetemprature",
         address=12,
         scale=0.1,
         precision=1,
@@ -479,7 +479,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
         scale=0.1,
         precision=1,
         scan_interval=10,
-        unit_of_measurement="Bar",
+        unit_of_measurement="bar",
         device_class="pressure",
         state_class="measurement",
     ),
@@ -503,8 +503,9 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_heatgas",
-        name="Heißgastemperatur",
+        name="Temp Heat Gas",
         address=19,
+        scale=0.1,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
         unit_of_measurement="°C",
         device_class="temperature",
@@ -537,7 +538,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
         name="Dampfdruck Kondensator",
         address=22,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
-        unit_of_measurement="Bar",
+        unit_of_measurement="bar",
         device_class="pressure",
         state_class="measurement",
     ),
@@ -546,7 +547,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
         name="Dampfdruck Verdampfer",
         address=23,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
-        unit_of_measurement="Bar",
+        unit_of_measurement="bar",
         device_class="pressure",
         state_class="measurement",
     ),
