@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to LG Heatpump",
+        "description": "Enter the connection details for your LG Heatpump Modbus TCP gateway.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "slave": "Slave / Unit ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. Check the host/port and that the device is reachable.",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  }
+}

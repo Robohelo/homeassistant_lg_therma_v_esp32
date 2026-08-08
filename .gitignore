@@ -1,1 +1,9 @@
 secret.yaml
+.DS_Store
+__pycache__/
+*.pyc
+.pycache/
+.python-version
+.venv/
+.idea/
+.vscode/
