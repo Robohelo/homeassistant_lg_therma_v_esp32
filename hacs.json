@@ -1,5 +1,5 @@
 {
-  "name": "LG Thermal V Heatpump (Modbus)",
+  "name": "LG Heatpump (Modbus)",
   "render_readme": true,
   "homeassistant": "2024.6.0"
 }

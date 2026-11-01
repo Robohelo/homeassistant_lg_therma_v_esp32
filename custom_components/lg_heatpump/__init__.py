@@ -11,10 +11,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     BINARY_SENSOR_TYPES,
     CONF_SLAVE,
+    DERIVED_BINARY_SENSOR_TYPES,
+    NUMBER_TYPES,
+    SELECT_TYPES,
     DOMAIN,
     INPUT_TYPE_COIL,
     INPUT_TYPE_DISCRETE,
@@ -55,6 +59,31 @@ def _switch_verify_descriptions() -> list[ModbusSensorDescription]:
         )
         for s in SWITCH_TYPES
     ]
+
+
+def _remove_orphaned_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete registry entries for entities this version no longer creates.
+
+    V3.0 removed/hid several entities (duplicates, unverified power limit,
+    unconnected hardware, old German-named leftovers). Without this they
+    would linger as 'unavailable' / 'no longer provided' until deleted by hand.
+    """
+    expected = {
+        f"{entry.entry_id}_{d.key}"
+        for d in (
+            *[s for s in SENSOR_TYPES if s.create_entity],
+            *BINARY_SENSOR_TYPES,
+            *DERIVED_BINARY_SENSOR_TYPES,
+            *SWITCH_TYPES,
+            *SELECT_TYPES,
+            *NUMBER_TYPES,
+        )
+    }
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if reg_entry.unique_id not in expected:
+            _LOGGER.info("Removing obsolete entity %s", reg_entry.entity_id)
+            registry.async_remove(reg_entry.entity_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -114,6 +143,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "key_to_coordinator": key_to_coordinator,
     }
 
+    _remove_orphaned_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True

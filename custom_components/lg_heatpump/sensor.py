@@ -23,6 +23,7 @@ async def async_setup_entry(
     entities = [
         LgHeatpumpSensor(key_to_coordinator[description.key], description, entry)
         for description in SENSOR_TYPES
+        if description.create_entity
     ]
     async_add_entities(entities)
 

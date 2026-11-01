@@ -8,7 +8,13 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BINARY_SENSOR_TYPES, DOMAIN, ModbusBinarySensorDescription
+from .const import (
+    BINARY_SENSOR_TYPES,
+    DERIVED_BINARY_SENSOR_TYPES,
+    DOMAIN,
+    ModbusBinarySensorDescription,
+    ModbusDerivedBinarySensorDescription,
+)
 from .coordinator import LgHeatpumpModbusCoordinator
 
 
@@ -24,6 +30,12 @@ async def async_setup_entry(
         LgHeatpumpBinarySensor(key_to_coordinator[description.key], description, entry)
         for description in BINARY_SENSOR_TYPES
     ]
+    entities.extend(
+        LgHeatpumpDerivedBinarySensor(
+            key_to_coordinator[description.source_key], description, entry
+        )
+        for description in DERIVED_BINARY_SENSOR_TYPES
+    )
     async_add_entities(entities)
 
 
@@ -58,3 +70,51 @@ class LgHeatpumpBinarySensor(CoordinatorEntity[LgHeatpumpModbusCoordinator], Bin
         if value is None:
             return None
         return bool(value)
+
+
+class LgHeatpumpDerivedBinarySensor(
+    CoordinatorEntity[LgHeatpumpModbusCoordinator], BinarySensorEntity
+):
+    """On when the source sensor's value is non-zero (e.g. ODU operation cycle 1/2)."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: LgHeatpumpModbusCoordinator,
+        description: ModbusDerivedBinarySensorDescription,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._description = description
+        self._attr_name = description.name
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_device_class = description.device_class
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=entry.title,
+            manufacturer="LG",
+            model="Heatpump (Modbus)",
+        )
+
+    def _value(self):
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(self._description.source_key)
+
+    @property
+    def is_on(self) -> bool | None:
+        value = self._value()
+        if value is None:
+            return None
+        return value != 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        value = self._value()
+        if value is None:
+            return {}
+        return {
+            "operation_cycle": value,
+            "state_text": self._description.labels.get(int(value), f"Unknown ({int(value)})"),
+        }

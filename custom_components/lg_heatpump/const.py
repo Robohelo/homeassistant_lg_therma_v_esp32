@@ -225,10 +225,28 @@ the relevant definition:
     TCP config in this integration implies an RTU↔TCP gateway sits in
     between; and using Modbus for control disables the LG wall
     controller for the functions controlled that way.
+
+12. (Added 2026-09, on request) Every entity `name` that was still in
+    German was translated to English - using the exact wording from
+    the official manual (note 10) wherever that register is documented
+    there (pages 250-253), and a direct translation for registers
+    outside that range (the addr 16-24 temp/pressure sensors, which the
+    manual doesn't cover at all). `hp_temp_technikraum`'s name is now
+    "Room Air Temperature Circuit 1 (Sensor)", finally reflecting the
+    note 10 mislabel finding in the UI, not just in a comment. Also
+    fixed "Desinfection" -> "Disinfection" (an anglicized-German
+    misspelling, not real English) on the DHW tank binary_sensor.
+    Every `key` (unique_id/entity_id) was deliberately left unchanged
+    throughout - only the displayed `name` changed, so existing
+    dashboards/automations referencing entity_ids keep working. Where a
+    circuit's input-register sensor and its writable holding-register
+    counterpart would otherwise end up with the identical name (the
+    manual doesn't distinguish them either), "(Sensor)" / "(Setpoint)"
+    suffixes were added to tell them apart in the UI.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from homeassistant.const import Platform
 
@@ -277,6 +295,10 @@ class ModbusSensorDescription:
     device_class: str | None = None
     state_class: str | None = None
     scan_interval: int = DEFAULT_SCAN_INTERVAL
+    # V3.0: False = the register is still polled (a Number/Select entity or a
+    # derived binary_sensor reads its value) but no separate sensor.* entity
+    # is created for it - avoids showing the same value twice in the UI.
+    create_entity: bool = True
 
 
 @dataclass(frozen=True)
@@ -288,6 +310,18 @@ class ModbusBinarySensorDescription:
     address: int
     device_class: str | None = None
     scan_interval: int = DEFAULT_SCAN_INTERVAL
+
+
+@dataclass(frozen=True)
+class ModbusDerivedBinarySensorDescription:
+    """A binary_sensor computed from an already-polled sensor value (no extra register read)."""
+
+    key: str
+    name: str
+    source_key: str
+    device_class: str | None = None
+    # Value -> label, used for the extra `state_text` attribute.
+    labels: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -344,7 +378,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_inlet_temp",
-        name="Inlet Temperature",
+        name="Water Inlet Temperature",
         address=2,
         scale=0.1,
         precision=1,
@@ -355,7 +389,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_outlet_temp",
-        name="Outlet Temperature",
+        name="Water Outlet Temperature",
         address=3,
         scale=0.1,
         precision=1,
@@ -377,7 +411,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_dhw_water_temp",
-        name="DHW Water Temperature",
+        name="DHW Tank Water Temperature",
         address=5,
         scale=0.1,
         precision=1,
@@ -397,18 +431,18 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
         device_class="temperature",
         state_class="measurement",
     ),
-    # CONFIRMED BY THE OFFICIAL LG MANUAL (see note 10), not just the
-    # community wiki: register 30008 (this address, 7) is documented as
-    # "Room air temp. (Circuit 1)", not a utility-room ("Technikraum")
-    # sensor. Kept as originally named since renaming would change this
-    # entity's key/unique_id and break any existing dashboards or
-    # automations referencing `sensor.hp_temp_technikraum` - but this is
-    # about as close to certain as this kind of cross-check gets, so
-    # consider renaming both `key` and `name` here once you've confirmed
-    # it against your own unit.
+    # CONFIRMED BY THE OFFICIAL LG MANUAL (see note 10): register 30008
+    # (this address, 7) is documented as "Room air temp. (Circuit 1)",
+    # not a utility-room ("Technikraum") sensor. `name` below now uses
+    # that corrected English wording (2026-09, per your request to
+    # de-German the entity names using the manual as source - see note
+    # 12). `key` is deliberately left as `hp_temp_technikraum` so this
+    # entity's unique_id/entity_id doesn't change and existing
+    # dashboards/automations referencing `sensor.hp_temp_technikraum`
+    # keep working - only the displayed name changed.
     ModbusSensorDescription(
-        key="temperature_indoreunit",
-        name="Temperature Terminal",
+        key="hp_temp_technikraum",
+        name="Room Air Temperature Circuit 1 (Sensor)",
         address=7,
         scale=0.1,
         precision=1,
@@ -419,12 +453,12 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_flow_rate",
-        name="Flow Rate",
+        name="Current Flow Rate",
         address=8,
         scale=0.1,
         precision=1,
         scan_interval=10,
-        unit_of_measurement="L/min",
+        unit_of_measurement="l/min",
         device_class="volume_flow_rate",
         state_class="measurement",
     ),
@@ -441,7 +475,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_room_air_temp_circuit2_input",
-        name="Room Air Temperature Circuit 2 (Input)",
+        name="Room Air Temperature Circuit 2 (Sensor)",
         address=10,
         scale=0.1,
         precision=1,
@@ -454,7 +488,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # `states('sensor.hp_energy_state_raw')` reference.
     ModbusSensorDescription(
         key="hp_energy_state_raw",
-        name="Energy State (raw)",
+        name="Energy State (Status)",
         address=11,
         scan_interval=10,
     ),
@@ -462,7 +496,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # resolved, hp_water_pressure moved to address 13 per official docs.
     ModbusSensorDescription(
         key="hp_outside_temp",
-        name="Outsidetemprature",
+        name="Outdoor Air Temperature",
         address=12,
         scale=0.1,
         precision=1,
@@ -485,8 +519,10 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_liquid_gas",
-        name="Temp Liquid Gas",
+        name="Liquid Line Temperature",
         address=16,
+        scale=0.1,
+        precision=1,
         scan_interval=10,
         unit_of_measurement="°C",
         device_class="temperature",
@@ -494,8 +530,10 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_suction",
-        name="Temperatur Absaugung",
+        name="Suction Temperature",
         address=18,
+        scale=0.1,
+        precision=1,
         scan_interval=2,
         unit_of_measurement="°C",
         device_class="temperature",
@@ -503,9 +541,10 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_heatgas",
-        name="Temp Heat Gas",
+        name="Hot Gas Temperature",
         address=19,
         scale=0.1,
+        precision=1,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
         unit_of_measurement="°C",
         device_class="temperature",
@@ -513,7 +552,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_before_vaporiser",
-        name="Dampftemperatur vor Verdampfer",
+        name="Vapor Temperature Before Evaporator",
         address=20,
         scale=0.1,
         precision=1,
@@ -524,7 +563,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_temp_after_vaporiser",
-        name="Dampftemperatur nach Verdampfer",
+        name="Vapor Temperature After Evaporator",
         address=21,
         scale=0.1,
         precision=1,
@@ -535,8 +574,10 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_high_pressure",
-        name="Dampfdruck Kondensator",
+        name="Condenser Pressure (High)",
         address=22,
+        scale=0.01,
+        precision=2,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
         unit_of_measurement="bar",
         device_class="pressure",
@@ -544,8 +585,10 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_low_pressure",
-        name="Dampfdruck Verdampfer",
+        name="Evaporator Pressure (Low)",
         address=23,
+        scale=0.01,
+        precision=2,
         scan_interval=DEFAULT_SCAN_INTERVAL,  # not set in YAML - see note 2
         unit_of_measurement="bar",
         device_class="pressure",
@@ -553,7 +596,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_compressor_rpm",
-        name="Kompressordrehzahl",
+        name="Compressor Speed",
         address=24,
         scale=60,
         precision=None,  # YAML had an invalid `precision: 0.1` - see note 3
@@ -571,7 +614,7 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # actual error. Reverted back to the original YAML's `input_type`.
     ModbusSensorDescription(
         key="hp_product_info",
-        name="Produktinfos",
+        name="Product Info",
         address=9998,
         scan_interval=60,
     ),
@@ -583,21 +626,21 @@ INPUT_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
 HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ModbusSensorDescription(
         key="hp_operation_mode_raw",
-        name="Operation Mode (raw)",
+        name="Operation Mode (Raw)",
         address=0,
         input_type=INPUT_TYPE_HOLDING,
         scan_interval=60,
     ),
     ModbusSensorDescription(
         key="hp_control_method_raw",
-        name="Control Method (raw)",
+        name="Control Method (Raw)",
         address=1,
         input_type=INPUT_TYPE_HOLDING,
         scan_interval=60,
     ),
     ModbusSensorDescription(
         key="hp_target_temp_circuit1",
-        name="Zieltemperatur HK1",
+        name="Target Temperature Circuit 1",
         address=2,
         input_type=INPUT_TYPE_HOLDING,
         scale=0.1,
@@ -608,7 +651,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_room_air_temp_circuit1",
-        name="Room Air Temperature Circuit 1",
+        name="Room Air Temperature Circuit 1 (Setpoint)",
         address=3,
         input_type=INPUT_TYPE_HOLDING,
         scale=0.1,
@@ -622,7 +665,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # already used by the corresponding number entity.
     ModbusSensorDescription(
         key="hp_shift_value_in_auto_mode_circuit1",
-        name="Sollwertverschiebung HK1",
+        name="Shift Value (Auto Mode) Circuit 1",
         address=4,
         input_type=INPUT_TYPE_HOLDING,
         precision=1,
@@ -632,7 +675,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_target_temp_circuit2",
-        name="Zieltemperatur HK2",
+        name="Target Temperature Circuit 2",
         address=5,
         input_type=INPUT_TYPE_HOLDING,
         scale=0.1,
@@ -643,7 +686,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_room_air_temp_circuit2",
-        name="Room Air Temperature Circuit 2",
+        name="Room Air Temperature Circuit 2 (Setpoint)",
         address=6,
         input_type=INPUT_TYPE_HOLDING,
         scale=0.1,
@@ -657,7 +700,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # already used by the corresponding number entity.
     ModbusSensorDescription(
         key="hp_shift_value_in_auto_mode_circuit2",
-        name="Sollwertverschiebung HK2",
+        name="Shift Value (Auto Mode) Circuit 2",
         address=7,
         input_type=INPUT_TYPE_HOLDING,
         precision=1,
@@ -667,7 +710,7 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ),
     ModbusSensorDescription(
         key="hp_dhw_target_temp",
-        name="DHW Zieltemperatur",
+        name="DHW Target Temperature",
         address=8,
         input_type=INPUT_TYPE_HOLDING,
         scale=0.1,
@@ -679,31 +722,160 @@ HOLDING_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     # Write target for energy state (see note 6) - correct, unchanged from YAML.
     ModbusSensorDescription(
         key="hp_energy_state_input_raw",
-        name="LG WP Energiezustand-Eingang",
+        name="Energy State Input (Raw)",
         address=9,
         input_type=INPUT_TYPE_HOLDING,
         scan_interval=10,
     ),
-    # UNVERIFIED (see note 9): official docs don't list a holding
-    # register at address 24 at all - the table jumps from addr 9
-    # straight to addr 23 ("Compressor Modulation": 0, or 40-100 as a
-    # percentage - a different concept from a kW power limit) and then
-    # addr 9998. May be a newer-firmware register the docs (last edited
-    # Feb 2025) don't cover, or may be the wrong address - unconfirmed.
+)
+
+
+# ---------------------------------------------------------------------------
+# V3.0 additions: energy / modulation registers (NOT in the original YAML)
+# ---------------------------------------------------------------------------
+# Source: community register documentation (basti242/homeassistant_lg_therma_v_modbus
+# wiki, "LG Register documentation"): input registers 30037-30046 (HA address
+# 36-45) are 32-bit values split into a High and a Low word (High word at the
+# lower address -> big-endian ">I", i.e. DATA_TYPE_UINT32), documented in Wh.
+# Holding register 40024 (HA address 23) = "Compressor Modulation"
+# (0 = not used, 40-100 = %). Per that wiki these registers only exist on
+# units built after Dec 2023 - if your firmware lacks them the entities just
+# stay "Unknown". They are NOT in the 2026 installer manual (its table ends at
+# 30013 / 40010), so treat names/units as UNVERIFIED until you compare them
+# with the heat pump display. The unit of the two "instantaneous" values is
+# the least certain (the wiki says Wh, but an instantaneous value is most
+# plausibly a power in W).
+ENERGY_SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = (
     ModbusSensorDescription(
-        key="hp_power_limit",
-        name="Power Limit",
-        address=24,
-        input_type=INPUT_TYPE_HOLDING,
-        precision=1,
-        scan_interval=10,
-        unit_of_measurement="kW",
+        key="hp_electric_power",
+        name="Electric Power",
+        address=36,
+        data_type=DATA_TYPE_UINT32,
+        count=2,
+        scan_interval=30,
+        unit_of_measurement="W",
         device_class="power",
+        state_class="measurement",
+    ),
+    ModbusSensorDescription(
+        key="hp_electric_energy_total",
+        name="Electric Energy Total",
+        address=38,
+        data_type=DATA_TYPE_UINT32,
+        count=2,
+        scale=0.001,
+        precision=3,
+        scan_interval=60,
+        unit_of_measurement="kWh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    ModbusSensorDescription(
+        key="hp_heat_output",
+        name="Heat Output",
+        address=40,
+        data_type=DATA_TYPE_UINT32,
+        count=2,
+        scan_interval=30,
+        unit_of_measurement="W",
+        device_class="power",
+        state_class="measurement",
+    ),
+    ModbusSensorDescription(
+        key="hp_cooling_energy_total",
+        name="Cooling Energy Total",
+        address=42,
+        data_type=DATA_TYPE_UINT32,
+        count=2,
+        scale=0.001,
+        precision=3,
+        scan_interval=60,
+        unit_of_measurement="kWh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    ModbusSensorDescription(
+        key="hp_dhw_energy_total",
+        name="DHW Energy Total",
+        address=44,
+        data_type=DATA_TYPE_UINT32,
+        count=2,
+        scale=0.001,
+        precision=3,
+        scan_interval=60,
+        unit_of_measurement="kWh",
+        device_class="energy",
+        state_class="total_increasing",
+    ),
+    ModbusSensorDescription(
+        key="hp_compressor_modulation",
+        name="Compressor Modulation",
+        address=23,
+        input_type=INPUT_TYPE_HOLDING,
+        scan_interval=30,
+        unit_of_measurement="%",
         state_class="measurement",
     ),
 )
 
-SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = INPUT_SENSOR_TYPES + HOLDING_SENSOR_TYPES
+# ---------------------------------------------------------------------------
+# V3.0 cleanup
+# ---------------------------------------------------------------------------
+# (a) Registers that are still POLLED (Number/Select entities read their
+#     current value from them) but whose separate sensor.* entity would only
+#     repeat what the Number/Select already shows.
+DUPLICATE_SENSOR_KEYS: frozenset[str] = frozenset(
+    {
+        "hp_operation_mode_raw",
+        "hp_control_method_raw",
+        "hp_energy_state_raw",
+        "hp_energy_state_input_raw",
+        "hp_target_temp_circuit1",
+        "hp_target_temp_circuit2",
+        "hp_dhw_target_temp",
+        "hp_shift_value_in_auto_mode_circuit1",
+        "hp_shift_value_in_auto_mode_circuit2",
+        "hp_room_air_temp_circuit1",
+        "hp_room_air_temp_circuit2",
+        # Raw value (4878) matches none of the documented product codes
+        # (0/3/4/5/6) - register 9998 is not a usable product ID here.
+        "hp_product_info",
+    }
+)
+
+# (b) Hardware that, on the reference installation, reads as "not connected"
+#     (-64.9 / -64.6 degC, 300.0 degC solar, circuit-2 target 0.0 degC).
+#     Set ENABLE_UNUSED_HARDWARE = True to get them all back (e.g. if you
+#     have a solar collector, a second heating circuit or a DHW tank sensor).
+ENABLE_UNUSED_HARDWARE = False
+UNUSED_HARDWARE_KEYS: frozenset[str] = frozenset(
+    {
+        "hp_solar_collector_temp",
+        "hp_solar_pump_status",
+        "hp_backup_heater_outlet_temp",
+        "hp_dhw_water_temp",
+        "hp_flow_temp_circle_2",
+        "hp_room_air_temp_circuit2_input",
+        "hp_mix_pump_status",
+        "hp_target_temp_circuit2",
+        "hp_shift_value_in_auto_mode_circuit2",
+        "hp_room_air_temp_circuit2",
+        "hp_hk2_target_temperatur_number",
+        "hp_shift_value_in_auto_mode_circuit2_number",
+        "hp_room_air_temp_circuit2_number",
+    }
+)
+
+
+def _keep(key: str) -> bool:
+    return ENABLE_UNUSED_HARDWARE or key not in UNUSED_HARDWARE_KEYS
+
+
+SENSOR_TYPES: tuple[ModbusSensorDescription, ...] = tuple(
+    replace(d, create_entity=False) if d.key in DUPLICATE_SENSOR_KEYS else d
+    for d in (INPUT_SENSOR_TYPES + HOLDING_SENSOR_TYPES + ENERGY_SENSOR_TYPES)
+    if _keep(d.key)
+)
 
 # ---------------------------------------------------------------------------
 # Binary sensors - Discrete Inputs
@@ -732,7 +904,7 @@ BINARY_SENSOR_TYPES: tuple[ModbusBinarySensorDescription, ...] = (
     ),
     ModbusBinarySensorDescription(
         key="hp_dhw_tank_desinfection_status",
-        name="DHW Tank Desinfection Status",
+        name="DHW Tank Disinfection Status",
         address=6,
         device_class="running",
     ),
@@ -786,17 +958,20 @@ BINARY_SENSOR_TYPES: tuple[ModbusBinarySensorDescription, ...] = (
 # ---------------------------------------------------------------------------
 SWITCH_TYPES: tuple[ModbusSwitchDescription, ...] = (
     ModbusSwitchDescription(
-        key="hp_hauptschalter", name="Wärmepumpe Hauptschalter", write_address=0, verify_address=0
+        key="hp_hauptschalter",
+        name="Heat Pump Power (On/Off)",
+        write_address=0,
+        verify_address=0,
     ),
     ModbusSwitchDescription(
-        key="hp_dhw", name="Warmwasserbereitung", write_address=1, verify_address=1
+        key="hp_dhw", name="Enable/Disable (DHW)", write_address=1, verify_address=1
     ),
     ModbusSwitchDescription(
-        key="hp_silent_mode", name="LG WP Ruhemodus", write_address=2, verify_address=2
+        key="hp_silent_mode", name="Silent Mode Set", write_address=2, verify_address=2
     ),
     ModbusSwitchDescription(
         key="hp_dhw_desinfection_mode",
-        name="DHW Desinfektionsmodus",
+        name="Trigger Disinfection Operation",
         write_address=3,
         verify_address=3,
     ),
@@ -808,18 +983,9 @@ SWITCH_TYPES: tuple[ModbusSwitchDescription, ...] = (
     ),
     ModbusSwitchDescription(
         key="hp_emergency_stop_switch",
-        name="Emergency Stop Switch",
+        name="Trigger Emergency Operation",
         write_address=5,
         verify_address=5,  # YAML had verify_address 3 - see note 5, CONFIRMED per official docs
-    ),
-    # UNVERIFIED (see note 5/9): official coil register docs only list
-    # addresses 0-5. Address 6 isn't documented at all - may be a
-    # newer-firmware coil, or may not exist on your unit.
-    ModbusSwitchDescription(
-        key="hp_active_power_limitation",
-        name="Active Power Limitation",
-        write_address=6,
-        verify_address=6,
     ),
 )
 
@@ -876,7 +1042,7 @@ SELECT_TYPES: tuple[ModbusSelectDescription, ...] = (
 NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ModbusNumberDescription(
         key="hp_shift_value_in_auto_mode_circuit1_number",
-        name="Sollwertverschiebung HK1",
+        name="Shift Value (Auto Mode) Circuit 1",
         source_key="hp_shift_value_in_auto_mode_circuit1",
         write_address=4,
         min_value=-5,
@@ -888,7 +1054,7 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ),
     ModbusNumberDescription(
         key="hp_shift_value_in_auto_mode_circuit2_number",
-        name="Sollwertverschiebung HK2",
+        name="Shift Value (Auto Mode) Circuit 2",
         source_key="hp_shift_value_in_auto_mode_circuit2",
         write_address=7,
         min_value=-5,
@@ -900,18 +1066,18 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ),
     ModbusNumberDescription(
         key="hp_hk1_target_temperatur_number",
-        name="HK1 Solltemperatur",
+        name="Target Temperature Circuit 1",
         source_key="hp_target_temp_circuit1",
         write_address=2,
         min_value=30,
-        max_value=50,
+        max_value=60,
         step=1,
         unit_of_measurement="°C",
         write_scale=10,
     ),
     ModbusNumberDescription(
         key="hp_hk2_target_temperatur_number",
-        name="HK2 Solltemperatur",
+        name="Target Temperature Circuit 2",
         source_key="hp_target_temp_circuit2",
         write_address=5,
         min_value=20,
@@ -922,7 +1088,7 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ),
     ModbusNumberDescription(
         key="hp_dhw_target_temperatur_number",
-        name="DHW Solltemperatur",
+        name="DHW Target Temperature",
         source_key="hp_dhw_target_temp",
         write_address=8,
         min_value=45,
@@ -933,7 +1099,7 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ),
     ModbusNumberDescription(
         key="hp_room_air_temp_circuit1_number",
-        name="Raumlufttemperatur HK1",
+        name="Room Air Temperature Circuit 1 (Setpoint)",
         source_key="hp_room_air_temp_circuit1",
         write_address=3,
         min_value=10,
@@ -944,7 +1110,7 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
     ),
     ModbusNumberDescription(
         key="hp_room_air_temp_circuit2_number",
-        name="Raumlufttemperatur HK2",
+        name="Room Air Temperature Circuit 2 (Setpoint)",
         source_key="hp_room_air_temp_circuit2",
         write_address=6,
         min_value=10,
@@ -953,15 +1119,20 @@ NUMBER_TYPES: tuple[ModbusNumberDescription, ...] = (
         unit_of_measurement="°C",
         write_scale=10,
     ),
-    ModbusNumberDescription(
-        key="hp_power_limit_number",
-        name="Leistungsbegrenzungswert",
-        source_key="hp_power_limit",
-        write_address=24,
-        min_value=0.1,
-        max_value=25.0,
-        step=0.1,
-        unit_of_measurement="kW",
-        write_scale=1,
+)
+
+BINARY_SENSOR_TYPES = tuple(d for d in BINARY_SENSOR_TYPES if _keep(d.key))
+NUMBER_TYPES = tuple(d for d in NUMBER_TYPES if _keep(d.key))
+
+# Derived "is it running" indicator (V3.0): reads the already-polled
+# `hp_odu_operation_cycle` value (manual: 0 = Standby/OFF, 1 = Cooling,
+# 2 = Heating) - no additional Modbus request.
+DERIVED_BINARY_SENSOR_TYPES: tuple[ModbusDerivedBinarySensorDescription, ...] = (
+    ModbusDerivedBinarySensorDescription(
+        key="hp_running",
+        name="Heat Pump Running",
+        source_key="hp_odu_operation_cycle",
+        device_class="running",
+        labels={0: "Standby", 1: "Cooling", 2: "Heating"},
     ),
 )

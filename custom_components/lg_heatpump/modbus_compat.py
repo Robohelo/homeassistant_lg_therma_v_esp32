@@ -31,12 +31,37 @@ releases (confirmed against 3.14.0). `await`-ing a `None` raises
 `TypeError: object NoneType can't be used in 'await' expression` /
 "'NoneType' object can't be awaited" - use `close_client()` below instead
 of calling `client.close()` directly, anywhere in this integration.
+
+Separately again: the shared `asyncio.Lock` that serializes every read
+and write onto the physical Modbus connection (see __init__.py) had no
+timeout on acquiring it. If a read is stuck retrying against a busy or
+noisy bus - which pymodbus's own default timeout/retry settings can
+stretch to several seconds per attempt - a write triggered right then
+just sits there waiting for the lock with no timeout, no log line, and
+no error, since it never reaches pymodbus at all to have anything to
+log. From the UI it looks exactly like nothing happened. `locked_for_write()`
+below puts a hard ceiling on that wait and raises a clear,
+user-visible error instead of hanging silently.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
+import logging
+from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import Any
+from typing import Any, AsyncIterator
+
+from homeassistant.exceptions import HomeAssistantError
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long a write will wait for a currently-in-progress read (or another
+# write) to release the shared lock before giving up loudly. Generous
+# enough to let one or two retried/timed-out reads finish naturally
+# (pymodbus's own per-call timeout × retries can already take several
+# seconds) without making a genuinely stuck write hang indefinitely.
+WRITE_LOCK_TIMEOUT = 15
 
 
 @lru_cache(maxsize=1)
@@ -74,3 +99,38 @@ async def close_client(client: Any) -> None:
     result = client.close()
     if inspect.isawaitable(result):
         await result
+
+
+@asynccontextmanager
+async def locked_for_write(
+    lock: asyncio.Lock, description: str, timeout: float = WRITE_LOCK_TIMEOUT
+) -> AsyncIterator[None]:
+    """Acquire the shared Modbus lock for a write, with a hard timeout.
+
+    Logs as soon as the write is attempted (so there's always SOMETHING
+    in the log the moment you flip a switch/set a number/pick an option,
+    even if what follows is a timeout rather than actual Modbus traffic),
+    and raises `HomeAssistantError` - which Home Assistant surfaces as a
+    visible error, not a silent no-op - if the bus doesn't free up in
+    time.
+    """
+    _LOGGER.debug("Requesting Modbus bus lock to write %s", description)
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=timeout)
+    except asyncio.TimeoutError as err:
+        _LOGGER.error(
+            "Timed out after %ss waiting for the Modbus bus to be free to "
+            "write %s. The bus is likely busy with retried/failed reads - "
+            "check the log for 'No response received' or transaction ID "
+            "errors around this time.",
+            timeout,
+            description,
+        )
+        raise HomeAssistantError(
+            f"Modbus bus busy - timed out writing {description}"
+        ) from err
+    try:
+        _LOGGER.debug("Lock acquired, writing %s", description)
+        yield
+    finally:
+        lock.release()

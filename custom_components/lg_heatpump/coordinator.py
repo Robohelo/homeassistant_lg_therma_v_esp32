@@ -124,10 +124,21 @@ class LgHeatpumpModbusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if result.isError():
             raise UpdateFailed(f"Modbus error reading {description.key}: {result}")
 
+        # Bit reads (coils / discrete inputs) put their data in `.bits`.
+        # Do NOT rely on `.registers` being None for those: in current
+        # pymodbus versions bit responses also carry `.registers == []`
+        # (not None), which made the old "registers first, then bits"
+        # fallback pick the empty list -> IndexError -> every binary_sensor
+        # and switch state showed "Unknown" (fixed in V3.0).
+        if description.input_type in (INPUT_TYPE_COIL, INPUT_TYPE_DISCRETE):
+            bits = getattr(result, "bits", None)
+            if not bits:
+                raise UpdateFailed(f"No bit data returned for {description.key}")
+            # Bit lists are padded to a multiple of 8; only the first bit is ours.
+            return int(bool(bits[0]))
+
         registers = getattr(result, "registers", None)
-        if registers is None:
-            registers = getattr(result, "bits", None)
-        if registers is None:
-            raise UpdateFailed(f"No data returned for {description.key}")
+        if not registers or len(registers) < description.count:
+            raise UpdateFailed(f"No/short register data returned for {description.key}")
 
         return _decode_registers(list(registers), description)

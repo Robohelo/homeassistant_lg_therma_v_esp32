@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, NUMBER_TYPES, ModbusNumberDescription
 from .coordinator import LgHeatpumpModbusCoordinator
-from .modbus_compat import get_pymodbus_device_param
+from .modbus_compat import get_pymodbus_device_param, locked_for_write
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,7 +87,9 @@ class LgHeatpumpNumber(CoordinatorEntity[LgHeatpumpModbusCoordinator], NumberEnt
         raw = max(0, min(raw, 0xFFFF))
 
         # Same shared lock the coordinators use for reads - see __init__.py.
-        async with self.coordinator.lock:
+        # locked_for_write times out instead of hanging silently forever -
+        # see modbus_compat.py.
+        async with locked_for_write(self.coordinator.lock, self._description.key):
             result = await self._client.write_register(
                 address=self._description.write_address,
                 value=raw,

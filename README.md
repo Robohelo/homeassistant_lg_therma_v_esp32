@@ -1,6 +1,15 @@
+# V3.0 changes (major)
+
+- **FIXED: all binary sensors / switch states showed "Unknown".** Bit reads (coils, discrete inputs) return `.registers == []` (not `None`) in current pymodbus, so the decoder never looked at `.bits`. Now decoded from `.bits`.
+- **On/Off + running indicator:** switch `Heat Pump Power (On/Off)` (coil 0, main switch) and new binary_sensor `Heat Pump Running` derived from `ODU Operation Cycle` (0 = standby/off, 1 = cooling, 2 = heating; attribute `state_text`). No extra Modbus request.
+- **Power/energy registers (UNVERIFIED, from the community register wiki, units as listed there; units of the two instantaneous values are uncertain):** input addr 36-45 as 32-bit pairs -> `Electric Power`, `Electric Energy Total` (kWh), `Heat Output`, `Cooling Energy Total`, `DHW Energy Total`; holding addr 23 -> `Compressor Modulation` (%). Units built before Dec 2023 may lack them (entities stay Unknown). The old `Power Limit` (holding 24), its number and `Active Power Limitation` (coil 6) were removed: undocumented and never returned data.
+- **Scale fixes (inferred from your screenshots):** liquid/suction/hot-gas temperatures x0.1 (were 201/214/410 degC), pressures x0.01 bar (were 866/699 "Bar"). Pressure value is inferred - compare with the unit's service display.
+- **Cleanup:** duplicate sensors that only repeated a Number/Select are no longer created (still polled); unconnected hardware (solar, backup-heater outlet temp, DHW tank temp, circuit 2, mix pump) removed - set `ENABLE_UNUSED_HARDWARE = True` in `const.py` to restore. Obsolete entities are removed from the entity registry automatically on start.
+- Entity keys unchanged -> existing dashboards for kept entities keep working.
+
 # LG Heatpump (Modbus) — Home Assistant Integration
 
-**V2.7** — full conversion of your entire `modbus:` + `template:` YAML
+**V2.9** — full conversion of your entire `modbus:` + `template:` YAML
 (23 input registers, 11 holding registers, 17 discrete inputs, 7 coils, 3
 template selects, 8 template numbers) into a HACS-installable integration
 with a UI config flow, five entity platforms, and no more `secrets.yaml`
@@ -232,6 +241,39 @@ Everything lives in `const.py`, grouped into five tuples:
 remove, or edit an entry there and restart — no other file needs to
 change.
 
+## 🇬🇧 Entity names de-Germanized, HK1 max raised to 60°C
+
+Two changes made on request:
+
+1. **Every entity `name` still in German was translated to English.**
+   Wherever the register is documented in the official manual (note 10 /
+   pages 250-253), the manual's own English wording was used; the
+   handful of registers outside that documented range (the addr 16-24
+   temp/pressure sensors) got a direct translation instead, since no
+   English source covers them. Also fixed "Desinfection" → "Disinfection"
+   on the DHW tank binary_sensor - an anglicized-German misspelling that
+   had nothing to do with the German-name cleanup specifically, just a
+   typo worth catching while in there.
+
+   **Only `name` changed - every `key` (which drives the entity's
+   unique_id/entity_id) was left exactly as it was.** So
+   `sensor.hp_temp_technikraum` is still called that internally and in
+   any automation/dashboard you've already built - only the friendly
+   name shown in the UI changed, now to "Room Air Temperature Circuit 1
+   (Sensor)", finally reflecting the note 10 finding in the UI itself
+   rather than just a code comment.
+
+   Two pairs of entities (circuit 1 and circuit 2 room air temperature)
+   each have a read-only input-register sensor and a separate writable
+   holding-register one. The manual uses near-identical wording for
+   both halves of each pair, so they'd have ended up with identical
+   names - "(Sensor)" and "(Setpoint)" suffixes were added to tell them
+   apart in the UI.
+
+2. **`hp_hk1_target_temperatur_number`'s `max_value` raised from 50 to
+   60** (in `NUMBER_TYPES` in `const.py`, alongside the other min/max/step
+   fields for that entity).
+
 ## 🔧 Fixed: transaction ID mismatches, "no response after retries", garbled reads
 
 If your log looks like this:
@@ -282,6 +324,38 @@ garbled/mismatched traffic in the logs.
    talks to the same gateway. The existing `RS485 Conflict Time Gap`
    (20ms) setting only meaningfully helps once Multi-host queuing is
    active.
+
+## 🔧 Fixed: writes silently doing nothing (no log output at all)
+
+If flipping a switch, setting a number, or picking a select option
+appeared to do nothing - not even an error, just silence, while reads
+were working fine:
+
+The V2.7 fix added a shared lock so reads and writes never overlap on
+the physical bus (correct, and still necessary). But that lock had no
+timeout on acquiring it. If a read was stuck retrying when you triggered
+a write - which can genuinely take several seconds, since pymodbus's own
+per-call timeout × retry count already adds up - the write just sat
+there waiting for the lock with nothing to log, because it never
+actually reached pymodbus to have any traffic to log in the first place.
+From the UI, that's indistinguishable from the button doing nothing.
+
+Fixed with `locked_for_write()` in `modbus_compat.py`: writes now log
+the moment they're attempted (`Requesting Modbus bus lock to write
+<entity>`), and if the bus doesn't free up within 15 seconds, the write
+fails loudly with a `HomeAssistantError` (visible in the HA UI, not just
+buried in the log) instead of hanging indefinitely. Verified with two
+tests: one simulating a permanently-stuck lock holder (confirms the
+timeout fires and raises within ~1s using a shortened test timeout,
+rather than hanging), and one exercising the normal case (confirms two
+back-to-back writes still serialize and complete normally with no added
+overhead when the bus isn't contended).
+
+If you start seeing this timeout error regularly, it means the bus is
+genuinely busy enough that a 15-second wait isn't enough - which points
+back at the same root cause as the read issues (see the gateway
+Protocol/Multi-Host section above, and check whether anything else -
+another integration, another device - shares the same physical bus).
 
 ## Notes / possible follow-ups
 
@@ -376,6 +450,21 @@ against a live mock Modbus TCP server (connect → read → write → verify
 reasoning about what pymodbus's source does.
 
 ## Version history
+
+- **V2.9** — translated every remaining German entity `name` to English
+  (manual wording where covered, direct translation otherwise); fixed a
+  "Desinfection" → "Disinfection" spelling error; raised
+  `hp_hk1_target_temperatur_number`'s `max_value` from 50 to 60. No
+  `key`/unique_id/entity_id changed - display names only. Entity count
+  unchanged (69).
+
+- **V2.8** — fixed writes silently hanging forever with no log output:
+  the shared lock from V2.7 had no timeout on acquisition, so a write
+  triggered while a read was stuck retrying would just wait indefinitely
+  with nothing to log (since it never reached pymodbus). Added
+  `locked_for_write()` - logs the moment a write is attempted, and
+  raises a visible `HomeAssistantError` after 15s instead of hanging.
+  Verified with tests for both the timeout path and the normal path.
 
 - **V2.7** — fixed the root cause of transaction ID mismatches / garbled
   reads / constant retries: added a shared `asyncio.Lock` so this
